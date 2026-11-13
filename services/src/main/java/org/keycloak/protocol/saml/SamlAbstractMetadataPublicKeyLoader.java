@@ -102,29 +102,31 @@ public abstract class SamlAbstractMetadataPublicKeyLoader implements PublicKeyLo
                 try {
                     KeyInfo keyInfo = XMLSignatureUtil.createKeyInfo(keyInfoElement);
 
-                    X509Certificate cert = null;
                     String kid = null;
+                    List<X509Certificate> certs = new ArrayList<>();
                     for (XMLStructure xs : (List<XMLStructure>) keyInfo.getContent()) {
                         if (kid == null && xs instanceof KeyName) {
                             kid = ((KeyName) xs).getName();
-                        } else if (cert == null && xs instanceof X509Data) {
+                        } else if (xs instanceof X509Data) {
                             for (Object content : ((X509Data) xs).getContent()) {
                                 if (content instanceof X509Certificate) {
-                                    cert = ((X509Certificate) content);
-                                    // only the first X509Certificate is the signer
-                                    // the rest are just part of the chain
-                                    break;
+                                    certs.add((X509Certificate) content);
                                 }
                             }
                         }
                         // TODO: parse if KeyValue is defined without cert???
-                        if (kid != null && cert != null) {
-                            break;
-                        }
                     }
 
-                    if (cert != null) {
-                        logger.debugf("Adding certificate %s to the list of public kets", cert.getSubjectX500Principal());
+                    // Should only advertise leaf certificates, but better strip CA/chain certs, self-signed certs often have CA=true
+                    // Strip CA/chain certs (RFC 5280 4.2.1.9) only when a descriptor bundles several and an
+                    // end-entity cert disambiguates them; a lone self-signed leaf is often CA=TRUE, so keep it.
+                    boolean stripChain = certs.size() > 1 && certs.stream().anyMatch(c -> c.getBasicConstraints() == -1);
+                    for (X509Certificate cert : certs) {
+                        if (stripChain && cert.getBasicConstraints() != -1) {
+                            logger.debugf("Skipping CA certificate %s from the metadata descriptor", cert.getSubjectX500Principal());
+                            continue;
+                        }
+                        logger.debugf("Adding certificate %s to the list of public keys", cert.getSubjectX500Principal());
                         keys.add(createKeyWrapper(cert, kid, use));
                     }
                 } catch (MarshalException e) {
